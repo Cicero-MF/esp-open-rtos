@@ -23,39 +23,35 @@
 #define _SPI1_SCK_GPIO  14
 #define _SPI1_CS0_GPIO  15
 
-#define _SPI0_FUNC 1
-#define _SPI1_FUNC 2
+#define _SPI0_FUNC IOMUX_FUNC(1)
+#define _SPI1_FUNC IOMUX_FUNC(2)
 
 #define _SPI_BUF_SIZE 64
+#define __min(a,b) ((a > b) ? (b):(a))
 
 static bool _minimal_pins[2] = {false, false};
-
-inline static void _set_pin_function(uint8_t pin, uint32_t function)
-{
-    iomux_set_function(gpio_to_iomux(pin), function);
-}
 
 bool spi_init(uint8_t bus, spi_mode_t mode, uint32_t freq_divider, bool msb, spi_endianness_t endianness, bool minimal_pins)
 {
     switch (bus)
     {
         case 0:
-            _set_pin_function(_SPI0_MISO_GPIO, _SPI0_FUNC);
-            _set_pin_function(_SPI0_MOSI_GPIO, _SPI0_FUNC);
-            _set_pin_function(_SPI0_SCK_GPIO, _SPI0_FUNC);
+            gpio_set_iomux_function(_SPI0_MISO_GPIO, _SPI0_FUNC);
+            gpio_set_iomux_function(_SPI0_MOSI_GPIO, _SPI0_FUNC);
+            gpio_set_iomux_function(_SPI0_SCK_GPIO, _SPI0_FUNC);
             if (!minimal_pins)
             {
-                _set_pin_function(_SPI0_HD_GPIO, _SPI0_FUNC);
-                _set_pin_function(_SPI0_WP_GPIO, _SPI0_FUNC);
-                _set_pin_function(_SPI0_CS0_GPIO, _SPI0_FUNC);
+                gpio_set_iomux_function(_SPI0_HD_GPIO, _SPI0_FUNC);
+                gpio_set_iomux_function(_SPI0_WP_GPIO, _SPI0_FUNC);
+                gpio_set_iomux_function(_SPI0_CS0_GPIO, _SPI0_FUNC);
             }
             break;
         case 1:
-            _set_pin_function(_SPI1_MISO_GPIO, _SPI1_FUNC);
-            _set_pin_function(_SPI1_MOSI_GPIO, _SPI1_FUNC);
-            _set_pin_function(_SPI1_SCK_GPIO, _SPI1_FUNC);
+            gpio_set_iomux_function(_SPI1_MISO_GPIO, _SPI1_FUNC);
+            gpio_set_iomux_function(_SPI1_MOSI_GPIO, _SPI1_FUNC);
+            gpio_set_iomux_function(_SPI1_SCK_GPIO, _SPI1_FUNC);
             if (!minimal_pins)
-                _set_pin_function(_SPI1_CS0_GPIO, _SPI1_FUNC);
+                gpio_set_iomux_function(_SPI1_CS0_GPIO, _SPI1_FUNC);
             break;
         default:
             return false;
@@ -248,4 +244,37 @@ size_t spi_transfer(uint8_t bus, const void *out_data, void *in_data, size_t len
     }
 
     return len;
+}
+
+static void _repeat_send(uint8_t bus, uint32_t* dword,int32_t* repeats,spi_word_size_t size)
+{
+    uint8_t i = 0 ;
+    while(*repeats > 0)
+    {
+        uint16_t bytes_to_transfer = __min(*repeats * size , _SPI_BUF_SIZE);
+        _wait(bus);
+        _set_size(bus,bytes_to_transfer);
+        for(i = 0; i < (bytes_to_transfer + 3) / 4;i++)
+            SPI(bus).W[i] = *dword; //need test with memcpy !
+        _start(bus);
+        *repeats -= (bytes_to_transfer / size ) ;
+    }
+    _wait(bus);
+}
+
+void spi_repeat_send_8(uint8_t bus, uint8_t data,int32_t repeats)
+{
+    uint32_t dword = data << 24 | data << 16 | data << 8 | data;
+    _repeat_send(bus,&dword,&repeats, SPI_8BIT);
+}
+
+void spi_repeat_send_16(uint8_t bus, uint16_t data,int32_t repeats)
+{
+    uint32_t dword = data << 16 | data;
+    _repeat_send(bus,&dword,&repeats, SPI_16BIT);
+}
+
+void spi_repeat_send_32(uint8_t bus, uint32_t data,int32_t repeats)
+{
+    _repeat_send(bus,&data,&repeats, SPI_32BIT);
 }

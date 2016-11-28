@@ -20,6 +20,7 @@
 #include "esp/iomux_regs.h"
 #include "esp/sar_regs.h"
 #include "esp/wdev_regs.h"
+#include "esp/uart.h"
 
 #include "etstimer.h"
 #include "espressif/sdk_private.h"
@@ -31,7 +32,6 @@
 #include "espressif/osapi.h"
 #include "espressif/user_interface.h"
 
-#include "sdk_internal.h"
 #include "esplibs/libmain.h"
 #include "esplibs/libpp.h"
 #include "esplibs/libphy.h"
@@ -55,6 +55,9 @@ sdk_wifi_promiscuous_cb_t sdk_promiscuous_cb;
 
 static uint8_t _system_upgrade_flag; // Ldata009
 
+// Timer to execute a second phase of switching to a deep sleep
+static ETSTimer deep_sleep_timer;
+
 // Prototypes for static functions
 static bool _check_boot_version(void);
 static void _deep_sleep_phase2(void *timer_arg);
@@ -77,16 +80,23 @@ void IRAM sdk_system_restart_in_nmi(void) {
         buf[0] = 3;
         sdk_system_rtc_mem_write(0, buf, 32);
     }
+
+    uart_flush_txfifo(0);
+    uart_flush_txfifo(1);
+
     if (!sdk_NMIIrqIsOn) {
         portENTER_CRITICAL();
         do {
             DPORT.DPORT0 = SET_FIELD(DPORT.DPORT0, DPORT_DPORT0_FIELD0, 0);
         } while (DPORT.DPORT0 & 1);
     }
+
     ESPSAR.UNKNOWN_48 |= 3;
     DPORT.CLOCKGATE_WATCHDOG |= DPORT_CLOCKGATE_WATCHDOG_UNKNOWN_8;
     ESPSAR.UNKNOWN_48 &= ~3;
     DPORT.CLOCKGATE_WATCHDOG &= ~DPORT_CLOCKGATE_WATCHDOG_UNKNOWN_8;
+
+    Wait_SPI_Idle(&sdk_flashchip);
     Cache_Read_Disable();
     DPORT.SPI_CACHE_RAM &= ~(DPORT_SPI_CACHE_RAM_BANK0 | DPORT_SPI_CACHE_RAM_BANK1);
     // This calls directly to 0x40000080, the "reset" exception vector address.
@@ -407,8 +417,13 @@ void sdk_system_deep_sleep(uint32_t time_in_us) {
         sdk_wifi_softap_stop();
     }
     sdk_os_timer_disarm(&sdk_sta_con_timer);
-    sdk_os_timer_setfn(&sdk_sta_con_timer, _deep_sleep_phase2, (void *)time_in_us);
-    sdk_os_timer_arm(&sdk_sta_con_timer, 100, 0);
+
+    // Originally deep sleep function reused sdk_sta_con_timer
+    // but we can't mix functions sdk_ets_timer_ with sdk_os_timer_ for the
+    // same timer. So now deep sleep function uses a separate timer.
+    sdk_ets_timer_disarm(&deep_sleep_timer);
+    sdk_ets_timer_setfn(&deep_sleep_timer, _deep_sleep_phase2, (void *)time_in_us);
+    sdk_ets_timer_arm(&deep_sleep_timer, 100, 0);
 }
 
 bool sdk_system_update_cpu_freq(uint8_t freq) {
@@ -454,6 +469,7 @@ uint32_t sdk_system_relative_time(uint32_t reltime) {
     return WDEV.SYS_TIME - reltime;
 }
 
+// Change arg types to ip4_addr for lwip v2.
 void sdk_system_station_got_ip_set(struct ip_addr *ip, struct ip_addr *mask, struct ip_addr *gw) {
     uint8_t *ip_bytes = (uint8_t *)&ip->addr;
     uint8_t *mask_bytes = (uint8_t *)&mask->addr;
@@ -522,10 +538,10 @@ bool sdk_wifi_station_dhcpc_start(void) {
         return false;
     }
     if (netif && sdk_dhcpc_flag == DHCP_STOPPED) {
-        sdk_info.ipaddr.addr = 0;
-        sdk_info.netmask.addr = 0;
-        sdk_info.gw.addr = 0;
-        netif_set_addr(netif, &sdk_info.ipaddr, &sdk_info.netmask, &sdk_info.gw);
+        sdk_info.sta_ipaddr.addr = 0;
+        sdk_info.sta_netmask.addr = 0;
+        sdk_info.sta_gw.addr = 0;
+        netif_set_addr(netif, &sdk_info.sta_ipaddr, &sdk_info.sta_netmask, &sdk_info.sta_gw);
         if (dhcp_start(netif)) {
             return false;
         }
@@ -548,6 +564,154 @@ bool sdk_wifi_station_dhcpc_stop(void) {
 
 enum sdk_dhcp_status sdk_wifi_station_dhcpc_status(void) {
     return sdk_dhcpc_flag;
+}
+
+uint8_t sdk_wifi_station_get_connect_status() {
+    if (sdk_wifi_get_opmode() == 2) // ESPCONN_AP
+        return 0xff;
+
+    struct sdk_g_ic_netif_info *netif_info = sdk_g_ic.v.station_netif_info;
+    if (!netif_info)
+        return 0xff;
+
+    return netif_info->connect_status;
+}
+
+bool sdk_wifi_get_ip_info(uint8_t if_index, struct ip_info *info) {
+    if (if_index >= 2) return false;
+    if (!info) return false;
+    struct netif *netif = _get_netif(if_index);
+    if (netif) {
+        info->ip = netif->ip_addr;
+        info->netmask = netif->netmask;
+        info->gw = netif->gw;
+        return true;
+    }
+
+    info->ip.addr = 0;
+    info->netmask.addr = 0;
+    info->gw.addr = 0;
+    return false;
+}
+
+bool sdk_wifi_set_ip_info(uint8_t if_index, struct ip_info *info) {
+    if (if_index >= 2) return false;
+    if (!info) return false;
+
+    if (if_index != 0) {
+        sdk_info.softap_ipaddr = info->ip;
+        sdk_info.softap_netmask = info->netmask;
+        sdk_info.softap_gw = info->gw;
+    } else {
+        if (sdk_dhcpc_flag == 1 && sdk_user_init_flag == 1)
+            return false;
+        sdk_info.sta_ipaddr = info->ip;
+        sdk_info.sta_netmask = info->netmask;
+        sdk_info.sta_gw = info->gw;
+    }
+
+    struct netif *netif = _get_netif(if_index);
+    if (netif)
+        netif_set_addr(netif, &info->ip, &info->netmask, &info->gw);
+
+    return true;
+}
+
+bool sdk_wifi_get_macaddr(uint8_t if_index, uint8_t *macaddr) {
+    if (if_index >= 2) return false;
+    if (!macaddr) return false;
+
+    struct netif *netif = _get_netif(if_index);
+    if (!netif) {
+        if (if_index != 0) {
+            memcpy(macaddr, sdk_info.softap_mac_addr, 6);
+            return true;
+        }
+        memcpy(macaddr, sdk_info.sta_mac_addr, 6);
+        return true;
+    }
+    memcpy(macaddr, netif->hwaddr, 6);
+    return true;
+}
+
+bool sdk_wifi_set_macaddr(uint8_t if_index, uint8_t *macaddr) {
+    if (if_index >= 2) return false;
+    if (!macaddr) return false;
+
+    struct netif *netif = _get_netif(if_index);
+    uint8_t mode = sdk_wifi_get_opmode();
+
+    if (if_index == 0) {
+        if (mode == STATION_MODE) return false;
+        if (memcmp(sdk_info.softap_mac_addr, macaddr, 6)) {
+            memcpy(sdk_info.softap_mac_addr, macaddr, 6);
+            if (netif) {
+                memcpy(netif->hwaddr, macaddr, 6);
+                sdk_wifi_softap_stop();
+                sdk_wifi_softap_start();
+            }
+        }
+        return true;
+    }
+
+    if (mode == SOFTAP_MODE) return false;
+    if (memcmp(sdk_info.sta_mac_addr, macaddr, 6)) {
+        memcpy(sdk_info.sta_mac_addr, macaddr, 6);
+        if (netif) {
+            memcpy(netif->hwaddr, macaddr, 6);
+            sdk_wifi_station_stop();
+            sdk_wifi_station_start();
+            sdk_wifi_station_connect();
+        }
+    }
+
+    return true;
+}
+
+void sdk_system_uart_swap()
+{
+    uart_flush_txfifo(0);
+    uart_flush_txfifo(1);
+
+    /* Disable pullup IO_MUX_MTDO, Alt TX. GPIO15. */
+    iomux_set_pullup_flags(3, 0);
+    /* IO_MUX_MTDO to function UART0_RTS. */
+    iomux_set_function(3, IOMUX_GPIO15_FUNC_UART0_RTS);
+    /* Enable pullup MUX_MTCK. Alt RX. GPIO13. */
+    iomux_set_pullup_flags(1, IOMUX_PIN_PULLUP);
+    /* IO_MUX_MTCK to function UART0_CTS. */
+    iomux_set_function(1, IOMUX_GPIO13_FUNC_UART0_CTS);
+
+    DPORT.PERI_IO |= DPORT_PERI_IO_SWAP_UART0_PINS;
+}
+
+void sdk_system_uart_de_swap()
+{
+    uart_flush_txfifo(0);
+    uart_flush_txfifo(1);
+
+    /* Disable pullup IO_MUX_U0TXD, TX. GPIO 1. */
+    iomux_set_pullup_flags(5, 0);
+    /* IO_MUX_U0TXD to function UART0_TXD. */
+    iomux_set_function(5, IOMUX_GPIO1_FUNC_UART0_TXD);
+    /* Enable pullup IO_MUX_U0RXD. RX. GPIO 3. */
+    iomux_set_pullup_flags(4, IOMUX_PIN_PULLUP);
+    /* IO_MUX_U0RXD to function UART0_RXD. */
+    iomux_set_function(4, IOMUX_GPIO3_FUNC_UART0_RXD);
+
+    DPORT.PERI_IO &= ~DPORT_PERI_IO_SWAP_UART0_PINS;
+}
+
+enum sdk_sleep_type sdk_wifi_get_sleep_type()
+{
+    return sdk_pm_get_sleep_type();
+}
+
+bool sdk_wifi_set_sleep_type(enum sdk_sleep_type type)
+{
+    if (type > WIFI_SLEEP_MODEM) return false;
+    sdk_pm_set_sleep_type_from_upper(type);
+    return true;
 }
 
 #endif /* OPEN_LIBMAIN_USER_INTERFACE */

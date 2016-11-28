@@ -94,7 +94,7 @@ void *xPortSupervisorStackPointer;
 /*
  * Stack initialization
  */
-portSTACK_TYPE *pxPortInitialiseStack( portSTACK_TYPE *pxTopOfStack, pdTASK_CODE pxCode, void *pvParameters )
+portSTACK_TYPE *pxPortInitialiseStack( portSTACK_TYPE *pxTopOfStack, TaskFunction_t pxCode, void *pvParameters )
 {
     #define SET_STKREG(r,v) sp[(r) >> 2] = (portSTACK_TYPE)(v)
     portSTACK_TYPE *sp, *tp;
@@ -143,7 +143,7 @@ void IRAM PendSV(enum SVC_ReqType req)
 	else if(req == SVC_MACLayer)
 		pending_maclayer_sv= 1;
 
-	xthal_set_intset(BIT(INUM_SOFT));
+	WSR(BIT(INUM_SOFT), interrupt);
 	vPortExitCritical();
 }
 
@@ -257,4 +257,12 @@ void IRAM vPortExitCritical( void )
     if( uxCriticalNesting == 0 )
 	portENABLE_INTERRUPTS();
 }
+
+/* Backward compatibility with libmain.a and libpp.a and can remove when these are open. */
+signed portBASE_TYPE xTaskGenericCreate( TaskFunction_t pxTaskCode, const signed char * const pcName, unsigned short usStackDepth, void *pvParameters, unsigned portBASE_TYPE uxPriority, TaskHandle_t *pxCreatedTask, portSTACK_TYPE *puxStackBuffer, const MemoryRegion_t * const xRegions )
+{
+    (void)puxStackBuffer; (void)xRegions;
+    return xTaskCreate( pxTaskCode, (const char * const)pcName, usStackDepth, pvParameters, uxPriority, pxCreatedTask);
+}
+
 

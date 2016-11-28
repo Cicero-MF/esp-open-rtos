@@ -33,14 +33,12 @@ git clone --recursive https://github.com/Superhouse/esp-open-rtos.git
 cd esp-open-rtos
 ```
 
-* To build any examples that use WiFi, edit `include/ssid_config.h` and change the two macro defines:
+* To build any examples that use WiFi, create `include/private_ssid_config.h` defining the two macro defines:
 
 ```c
 #define WIFI_SSID "mywifissid"
 #define WIFI_PASS "my secret password"
 ```
-
-Remove the `#warning` line and follow the git ignore instructions written in the header file to keep your credentials from being pushed to Github.
 
 * Build an example project (found in the 'examples' directory) and flash it to a serial port:
 
@@ -79,7 +77,7 @@ Current status is alpha quality, actively developed. AP STATION mode (ie wifi cl
 
 ## Open Source Components
 
-* [FreeRTOS](http://www.freertos.org/) V7.5.2
+* [FreeRTOS](http://www.freertos.org/) V9.0.0
 * [lwIP](http://lwip.wikia.com/wiki/LwIP_Wiki) v1.4.1, modified via the [esp-lwip project](https://github.com/kadamski/esp-lwip) by @kadamski.
 * [newlib](https://github.com/projectgus/newlib-xtensa) v2.2.0, with patches for xtensa support and locking stubs for thread-safe operation on FreeRTOS.
 

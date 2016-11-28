@@ -24,18 +24,18 @@
 #define MQTT_USER NULL
 #define MQTT_PASS NULL
 
-xSemaphoreHandle wifi_alive;
-xQueueHandle publish_queue;
+SemaphoreHandle_t wifi_alive;
+QueueHandle_t publish_queue;
 #define PUB_MSG_LEN 16
 
 static void  beat_task(void *pvParameters)
 {
-    portTickType xLastWakeTime = xTaskGetTickCount();
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     char msg[PUB_MSG_LEN];
     int count = 0;
 
     while (1) {
-        vTaskDelayUntil(&xLastWakeTime, 10000 / portTICK_RATE_MS);
+        vTaskDelayUntil(&xLastWakeTime, 10000 / portTICK_PERIOD_MS);
         printf("beat\r\n");
         snprintf(msg, PUB_MSG_LEN, "Beat %d\r\n", count++);
         if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
@@ -44,10 +44,10 @@ static void  beat_task(void *pvParameters)
     }
 }
 
-static void  topic_received(MessageData *md)
+static void  topic_received(mqtt_message_data_t *md)
 {
     int i;
-    MQTTMessage *message = md->message;
+    mqtt_message_t *message = md->message;
     printf("Received: ");
     for( i = 0; i < md->topic->lenstring.len; ++i)
         printf("%c", md->topic->lenstring.data[ i ]);
@@ -87,14 +87,14 @@ static const char *  get_my_id(void)
 static void  mqtt_task(void *pvParameters)
 {
     int ret         = 0;
-    struct Network network;
-    MQTTClient client   = DefaultClient;
+    struct mqtt_network network;
+    mqtt_client_t client   = mqtt_client_default;
     char mqtt_client_id[20];
     uint8_t mqtt_buf[100];
     uint8_t mqtt_readbuf[100];
-    MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
+    mqtt_packet_connect_data_t data = mqtt_packet_connect_data_initializer;
 
-    NewNetwork( &network );
+    mqtt_network_new( &network );
     memset(mqtt_client_id, 0, sizeof(mqtt_client_id));
     strcpy(mqtt_client_id, "ESP-");
     strcat(mqtt_client_id, get_my_id());
@@ -104,14 +104,14 @@ static void  mqtt_task(void *pvParameters)
         printf("%s: started\n\r", __func__);
         printf("%s: (Re)connecting to MQTT server %s ... ",__func__,
                MQTT_HOST);
-        ret = ConnectNetwork(&network, MQTT_HOST, MQTT_PORT);
+        ret = mqtt_network_connect(&network, MQTT_HOST, MQTT_PORT);
         if( ret ){
             printf("error: %d\n\r", ret);
             taskYIELD();
             continue;
         }
         printf("done\n\r");
-        NewMQTTClient(&client, &network, 5000, mqtt_buf, 100,
+        mqtt_client_new(&client, &network, 5000, mqtt_buf, 100,
                       mqtt_readbuf, 100);
 
         data.willFlag       = 0;
@@ -122,15 +122,15 @@ static void  mqtt_task(void *pvParameters)
         data.keepAliveInterval  = 10;
         data.cleansession   = 0;
         printf("Send MQTT connect ... ");
-        ret = MQTTConnect(&client, &data);
+        ret = mqtt_connect(&client, &data);
         if(ret){
             printf("error: %d\n\r", ret);
-            DisconnectNetwork(&network);
+            mqtt_network_disconnect(&network);
             taskYIELD();
             continue;
         }
         printf("done\r\n");
-        MQTTSubscribe(&client, "/esptopic", QOS1, topic_received);
+        mqtt_subscribe(&client, "/esptopic", MQTT_QOS1, topic_received);
         xQueueReset(publish_queue);
 
         while(1){
@@ -139,25 +139,25 @@ static void  mqtt_task(void *pvParameters)
             while(xQueueReceive(publish_queue, (void *)msg, 0) ==
                   pdTRUE){
                 printf("got message to publish\r\n");
-                MQTTMessage message;
+                mqtt_message_t message;
                 message.payload = msg;
                 message.payloadlen = PUB_MSG_LEN;
                 message.dup = 0;
-                message.qos = QOS1;
+                message.qos = MQTT_QOS1;
                 message.retained = 0;
-                ret = MQTTPublish(&client, "/beat", &message);
-                if (ret != SUCCESS ){
+                ret = mqtt_publish(&client, "/beat", &message);
+                if (ret != MQTT_SUCCESS ){
                     printf("error while publishing message: %d\n", ret );
                     break;
                 }
             }
 
-            ret = MQTTYield(&client, 1000);
-            if (ret == DISCONNECTED)
+            ret = mqtt_yield(&client, 1000);
+            if (ret == MQTT_DISCONNECTED)
                 break;
         }
         printf("Connection dropped, request restart\n\r");
-        DisconnectNetwork(&network);
+        mqtt_network_disconnect(&network);
         taskYIELD();
     }
 }
@@ -190,7 +190,7 @@ static void  wifi_task(void *pvParameters)
                 printf("WiFi: connection failed\r\n");
                 break;
             }
-            vTaskDelay( 1000 / portTICK_RATE_MS );
+            vTaskDelay( 1000 / portTICK_PERIOD_MS );
             --retries;
         }
         if (status == STATION_GOT_IP) {
@@ -205,7 +205,7 @@ static void  wifi_task(void *pvParameters)
         }
         printf("WiFi: disconnected\n\r");
         sdk_wifi_station_disconnect();
-        vTaskDelay( 1000 / portTICK_RATE_MS );
+        vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
 }
 
@@ -216,7 +216,7 @@ void user_init(void)
 
     vSemaphoreCreateBinary(wifi_alive);
     publish_queue = xQueueCreate(3, PUB_MSG_LEN);
-    xTaskCreate(&wifi_task, (int8_t *)"wifi_task",  256, NULL, 2, NULL);
-    xTaskCreate(&beat_task, (int8_t *)"beat_task", 256, NULL, 3, NULL);
-    xTaskCreate(&mqtt_task, (int8_t *)"mqtt_task", 1024, NULL, 4, NULL);
+    xTaskCreate(&wifi_task, "wifi_task",  256, NULL, 2, NULL);
+    xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
+    xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
 }

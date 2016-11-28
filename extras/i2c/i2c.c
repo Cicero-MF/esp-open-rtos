@@ -44,40 +44,51 @@ void i2c_init(uint8_t scl_pin, uint8_t sda_pin)
     started = false;
     g_scl_pin = scl_pin;
     g_sda_pin = sda_pin;
+
+    // Just to prevent these pins floating too much if not connected.
+    gpio_set_pullup(g_scl_pin, 1, 1);
+    gpio_set_pullup(g_sda_pin, 1, 1);
+
+    gpio_enable(g_scl_pin, GPIO_OUT_OPEN_DRAIN);
+    gpio_enable(g_sda_pin, GPIO_OUT_OPEN_DRAIN);
+
+    // I2C bus idle state.
+    gpio_write(g_scl_pin, 1);
+    gpio_write(g_sda_pin, 1);
 }
 
-static void i2c_delay(void)
+static inline void i2c_delay(void)
 {
     sdk_os_delay_us(CLK_HALF_PERIOD_US);
 }
 
-// Set SCL as input and return current level of line, 0 or 1
-static bool read_scl(void)
+// Set SCL as input, allowing it to float high, and return current
+// level of line, 0 or 1
+static inline bool read_scl(void)
 {
-    gpio_enable(g_scl_pin, GPIO_INPUT);
+    gpio_write(g_scl_pin, 1);
     return gpio_read(g_scl_pin); // Clock high, valid ACK
 }
 
-// Set SDA as input and return current level of line, 0 or 1
-static bool read_sda(void)
+// Set SDA as input, allowing it to float high, and return current
+// level of line, 0 or 1
+static inline bool read_sda(void)
 {
-    gpio_enable(g_sda_pin, GPIO_INPUT);
+    gpio_write(g_sda_pin, 1);
     // TODO: Without this delay we get arbitration lost in i2c_stop
     i2c_delay();
     return gpio_read(g_sda_pin); // Clock high, valid ACK
 }
 
 // Actively drive SCL signal low
-static void clear_scl(void)
+static inline void clear_scl(void)
 {
-    gpio_enable(g_scl_pin, GPIO_OUTPUT);
     gpio_write(g_scl_pin, 0);
 }
 
 // Actively drive SDA signal low
-static void clear_sda(void)
+static inline void clear_sda(void)
 {
-    gpio_enable(g_sda_pin, GPIO_OUTPUT);
     gpio_write(g_sda_pin, 0);
 }
 

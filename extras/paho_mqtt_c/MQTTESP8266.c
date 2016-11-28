@@ -28,43 +28,43 @@
 
 #include "MQTTESP8266.h"
 
-char  expired(Timer* timer)
+char  mqtt_timer_expired(mqtt_timer_t* timer)
 {
-    portTickType now = xTaskGetTickCount();
+    TickType_t now = xTaskGetTickCount();
     int32_t left = timer->end_time - now;
     return (left < 0);
 }
 
 
-void  countdown_ms(Timer* timer, unsigned int timeout)
+void  mqtt_timer_countdown_ms(mqtt_timer_t* timer, unsigned int timeout)
 {
-    portTickType now = xTaskGetTickCount();
-    timer->end_time = now + timeout / portTICK_RATE_MS;
+    TickType_t now = xTaskGetTickCount();
+    timer->end_time = now + timeout / portTICK_PERIOD_MS;
 }
 
 
-void  countdown(Timer* timer, unsigned int timeout)
+void  mqtt_timer_countdown(mqtt_timer_t* timer, unsigned int timeout)
 {
-    countdown_ms(timer, timeout * 1000);
+    mqtt_timer_countdown_ms(timer, timeout * 1000);
 }
 
 
-int  left_ms(Timer* timer)
+int  mqtt_timer_left_ms(mqtt_timer_t* timer)
 {
-    portTickType now = xTaskGetTickCount();
+    TickType_t now = xTaskGetTickCount();
     int32_t left = timer->end_time - now;
-    return (left < 0) ? 0 : left / portTICK_RATE_MS;
+    return (left < 0) ? 0 : left / portTICK_PERIOD_MS;
 }
 
 
-void  InitTimer(Timer* timer)
+void  mqtt_timer_init(mqtt_timer_t* timer)
 {
     timer->end_time = 0;
 }
 
 
 
-int  mqtt_esp_read(Network* n, unsigned char* buffer, int len, int timeout_ms)
+int  mqtt_esp_read(mqtt_network_t* n, unsigned char* buffer, int len, int timeout_ms)
 {
     struct timeval tv;
     fd_set fdset;
@@ -73,7 +73,7 @@ int  mqtt_esp_read(Network* n, unsigned char* buffer, int len, int timeout_ms)
     FD_ZERO(&fdset);
     FD_SET(n->my_socket, &fdset);
     // It seems tv_sec actually means FreeRTOS tick
-    tv.tv_sec = timeout_ms / portTICK_RATE_MS;
+    tv.tv_sec = timeout_ms / portTICK_PERIOD_MS;
     tv.tv_usec = 0;
     rc = select(n->my_socket + 1, &fdset, 0, 0, &tv);
     if ((rc > 0) && (FD_ISSET(n->my_socket, &fdset)))
@@ -89,7 +89,7 @@ int  mqtt_esp_read(Network* n, unsigned char* buffer, int len, int timeout_ms)
 }
 
 
-int  mqtt_esp_write(Network* n, unsigned char* buffer, int len, int timeout_ms)
+int  mqtt_esp_write(mqtt_network_t* n, unsigned char* buffer, int len, int timeout_ms)
 {
     struct timeval tv;
     fd_set fdset;
@@ -98,7 +98,7 @@ int  mqtt_esp_write(Network* n, unsigned char* buffer, int len, int timeout_ms)
     FD_ZERO(&fdset);
     FD_SET(n->my_socket, &fdset);
     // It seems tv_sec actually means FreeRTOS tick
-    tv.tv_sec = timeout_ms / portTICK_RATE_MS;
+    tv.tv_sec = timeout_ms / portTICK_PERIOD_MS;
     tv.tv_usec = 0;
     rc = select(n->my_socket + 1, 0, &fdset, 0, &tv);
     if ((rc > 0) && (FD_ISSET(n->my_socket, &fdset)))
@@ -115,7 +115,7 @@ int  mqtt_esp_write(Network* n, unsigned char* buffer, int len, int timeout_ms)
 
 
 
-void  NewNetwork(Network* n)
+void  mqtt_network_new(mqtt_network_t* n)
 {
     n->my_socket = -1;
     n->mqttread = mqtt_esp_read;
@@ -148,7 +148,7 @@ static int  host2addr(const char *hostname , struct in_addr *in)
 }
 
 
-int  ConnectNetwork(Network* n, const char* host, int port)
+int  mqtt_network_connect(mqtt_network_t* n, const char* host, int port)
 {
     struct sockaddr_in addr;
     int ret;
@@ -179,7 +179,7 @@ int  ConnectNetwork(Network* n, const char* host, int port)
 }
 
 
-int  DisconnectNetwork(Network* n)
+int  mqtt_network_disconnect(mqtt_network_t* n)
 {
     close(n->my_socket);
     n->my_socket = -1;
