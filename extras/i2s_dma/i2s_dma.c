@@ -26,6 +26,7 @@
 #include "esp/iomux.h"
 #include "esp/i2s_regs.h"
 #include "esp/interrupts.h"
+#include "esp/iomux.h"
 #include "common_macros.h"
 
 #include <stdlib.h>
@@ -61,7 +62,7 @@ void sdk_rom_i2c_writeReg_Mask(uint32_t block, uint32_t host_id,
             reg_add##_lsb,  indata)
 
 
-void i2s_dma_init(i2s_dma_isr_t isr, i2s_clock_div_t clock_div, i2s_pins_t pins)
+void i2s_dma_init(i2s_dma_isr_t isr, void *arg, i2s_clock_div_t clock_div, i2s_pins_t pins)
 {
     // reset DMA
     SET_MASK_BITS(SLC.CONF0, SLC_CONF0_RX_LINK_RESET);
@@ -82,7 +83,7 @@ void i2s_dma_init(i2s_dma_isr_t isr, i2s_clock_div_t clock_div, i2s_pins_t pins)
             SLC_RX_DESCRIPTOR_CONF_RX_EOF_MODE | SLC_RX_DESCRIPTOR_CONF_RX_FILL_MODE);
 
     if (isr) {
-        _xt_isr_attach(INUM_SLC, isr);
+        _xt_isr_attach(INUM_SLC, isr, arg);
         SET_MASK_BITS(SLC.INT_ENABLE, SLC_INT_ENABLE_RX_EOF);
         SLC.INT_CLEAR = 0xFFFFFFFF;
         _xt_isr_unmask(1<<INUM_SLC);

@@ -186,7 +186,7 @@ void spi_set_frequency_div(uint8_t bus, uint32_t divider);
 inline uint32_t spi_get_frequency_div(uint8_t bus)
 {
     return (FIELD2VAL(SPI_CLOCK_DIV_PRE, SPI(bus).CLOCK) + 1) |
-            (FIELD2VAL(SPI_CLOCK_COUNT_NUM, SPI(bus).CLOCK) + 1);
+           (FIELD2VAL(SPI_CLOCK_COUNT_NUM, SPI(bus).CLOCK) + 1);
 }
 /**
  * \brief Get SPI bus frequency in Hz
@@ -196,8 +196,8 @@ inline uint32_t spi_get_frequency_div(uint8_t bus)
 inline uint32_t spi_get_frequency_hz(uint8_t bus)
 {
     return APB_CLK_FREQ /
-            (FIELD2VAL(SPI_CLOCK_DIV_PRE, SPI(bus).CLOCK) + 1) /
-            (FIELD2VAL(SPI_CLOCK_COUNT_NUM, SPI(bus).CLOCK) + 1);
+           (FIELD2VAL(SPI_CLOCK_DIV_PRE, SPI(bus).CLOCK) + 1) /
+           (FIELD2VAL(SPI_CLOCK_COUNT_NUM, SPI(bus).CLOCK) + 1);
 }
 
 /**
@@ -231,7 +231,7 @@ inline spi_endianness_t spi_get_endianness(uint8_t bus)
 {
     return SPI(bus).USER0 & (SPI_USER0_WR_BYTE_ORDER | SPI_USER0_RD_BYTE_ORDER)
             ? SPI_BIG_ENDIAN
-                    : SPI_LITTLE_ENDIAN;
+            : SPI_LITTLE_ENDIAN;
 }
 
 /**
@@ -278,25 +278,35 @@ size_t spi_transfer(uint8_t bus, const void *out_data, void *in_data, size_t len
  * \brief Add permanent command bits when transfert data over SPI
  * Example:
  *
- *    spi_set_command(1,1,0x01); // Set one command bit to 1
- *    for (uint8_t i = 0 ; i < x ; i++ ) {
- *    	spi_transfer_8(1,0x55);  // Send 1 bit command + 8 bits data x times
+ *    spi_set_command(1, 1, 0x01); // Set one command bit to 1
+ *    for (uint8_t i = 0; i < x; i++ ) {
+ *    	spi_transfer_8(1, 0x55);  // Send 1 bit command + 8 bits data x times
  *    }
  *    spi_clear_command(1); // Clear command
- *    spi_transfer_8(1,0x55);  // Send 8 bits data
+ *    spi_transfer_8(1, 0x55);  // Send 8 bits data
  *
  * \param bus Bus ID: 0 - system, 1 - user
  * \param bits Number of bits (max: 16).
  * \param data Command to send for each transfert.
  */
-static inline void spi_set_command(uint8_t bus,uint8_t bits, uint16_t data)
+static inline void spi_set_command(uint8_t bus, uint8_t bits, uint16_t data)
 {
-    if(!bits) return ;
-    SPI(bus).USER0 |= SPI_USER0_COMMAND ; //enable COMMAND function in SPI module
-    uint16_t command = data << (16-bits); //align command data to high bits
-    command = ((command>>8)&0xff) | ((command<<8)&0xff00); //swap byte order
-    SPI(bus).USER2 =  SET_FIELD(SPI(bus).USER2, SPI_USER2_COMMAND_BITLEN, --bits);
-    SPI(bus).USER2 =  SET_FIELD(SPI(bus).USER2, SPI_USER2_COMMAND_VALUE, command);
+    if (!bits) return;
+
+    SPI(bus).USER0 |= SPI_USER0_COMMAND;                                //enable COMMAND function in SPI module
+    uint16_t command;
+    // Commands are always sent using little endian byte order
+    if (!spi_get_msb(bus)) {
+        // "data" are natively little endian, with LSB bit order
+        // this makes all bits of the command ready to be sent as-is
+        command = data;
+    } else {
+        // MSB
+        command = data << (16 - bits);                                 //align command data to high bits
+        command = ((command >> 8) & 0xff) | ((command << 8) & 0xff00); //swap byte order
+    }
+    SPI(bus).USER2 = SET_FIELD(SPI(bus).USER2, SPI_USER2_COMMAND_BITLEN, --bits);
+    SPI(bus).USER2 = SET_FIELD(SPI(bus).USER2, SPI_USER2_COMMAND_VALUE, command);
 }
 
 /**
@@ -314,24 +324,32 @@ static inline void spi_set_command(uint8_t bus,uint8_t bits, uint16_t data)
  * \param bits Number of bits (max: 32).
  * \param data Address to send for each transfert.
  */
-static inline void spi_set_address(uint8_t bus,uint8_t bits, uint32_t data)
+static inline void spi_set_address(uint8_t bus, uint8_t bits, uint32_t data)
 {
-    if(!bits) return ;
+    if (!bits) return;
+
+    SPI(bus).USER0 |= SPI_USER0_ADDR; //enable ADDRess function in SPI module
+    // addresses are always sent using big endian byte order
+    if (spi_get_msb(bus)) {
+        SPI(bus).ADDR = data << (32 - bits); //align address data to high bits
+    } else {
+        // swap bytes from native little to command's big endian order
+        // bits in each byte are already arranged properly for LSB
+        SPI(bus).ADDR = (data & 0xff) << 24 | (data & 0xff00) << 8 | ((data >> 8) & 0xff00) | ((data >> 24) & 0xff);
+    }
     SPI(bus).USER1 = SET_FIELD(SPI(bus).USER1, SPI_USER1_ADDR_BITLEN, --bits);
-    SPI(bus).USER0 |= SPI_USER0_ADDR ; //enable ADDRess function in SPI module
-    SPI(bus).ADDR = data<<(32-bits) ; //align address data to high bits
 }
 
 /**
  * \brief Add permanent dummy bits when transfert data over SPI
  * Example:
  *
- *    spi_set_dummy_bits(1,4,false); // Set 4 dummy bit before Dout
- *    for (uint8_t i = 0 ; i < x ; i++ ) {
- *    	spi_transfer_16(1,0xC584);  // Send 4 bits dummy + 16 bits Dout x times
+ *    spi_set_dummy_bits(1, 4, false); // Set 4 dummy bit before Dout
+ *    for (uint8_t i = 0; i < x; i++ ) {
+ *    	spi_transfer_16(1, 0xC584);  // Send 4 bits dummy + 16 bits Dout x times
  *    }
- *    spi_set_dummy_bits(1,4,true); // Set 4 dummy bit between Dout and Din
- *    spi_transfer_8(1,0x55);  // Send 8 bits Dout + 4 bits dummy + 8 bits Din
+ *    spi_set_dummy_bits(1, 4, true); // Set 4 dummy bit between Dout and Din
+ *    spi_transfer_8(1, 0x55);  // Send 8 bits Dout + 4 bits dummy + 8 bits Din
  *
  * \param bus Bus ID: 0 - system, 1 - user
  * \param bits Number of bits
@@ -339,8 +357,9 @@ static inline void spi_set_address(uint8_t bus,uint8_t bits, uint32_t data)
  */
 static inline void spi_set_dummy_bits(uint8_t bus, uint8_t bits, bool pos)
 {
-    if(!bits) return ;
-    if(pos) { SPI(bus).USER0 |= SPI_USER0_MISO; } // Dummy bit will be between Dout and Din data if set
+    if (!bits) return;
+    if (pos)
+        SPI(bus).USER0 |= SPI_USER0_MISO; // Dummy bit will be between Dout and Din data if set
     SPI(bus).USER0 |= SPI_USER0_DUMMY; //enable dummy bits
     SPI(bus).USER1 = SET_FIELD(SPI(bus).USER1, SPI_USER1_DUMMY_CYCLELEN, --bits);
 }
@@ -351,7 +370,7 @@ static inline void spi_set_dummy_bits(uint8_t bus, uint8_t bits, bool pos)
  */
 static inline void spi_clear_address(uint8_t bus)
 {
-    SPI(bus).USER0 &= ~(SPI_USER0_ADDR) ;
+    SPI(bus).USER0 &= ~(SPI_USER0_ADDR);
 }
 
 /**
@@ -361,7 +380,7 @@ static inline void spi_clear_address(uint8_t bus)
 
 static inline void spi_clear_command(uint8_t bus)
 {
-    SPI(bus).USER0 &= ~(SPI_USER0_COMMAND) ;
+    SPI(bus).USER0 &= ~(SPI_USER0_COMMAND);
 }
 
 /**
@@ -396,6 +415,16 @@ void spi_repeat_send_16(uint8_t bus, uint16_t data, int32_t repeats);
  * \param repeats Copy dword number
  */
 void spi_repeat_send_32(uint8_t bus, uint32_t data, int32_t repeats);
+
+/**
+ * \brief Repeatedly send byte over SPI and receive data
+ * \param bus Bus ID: 0 - system, 1 - user
+ * \param out_byte Byte to send
+ * \param in_data Receive buffer
+ * \param len Buffer size in words
+ * \param word_size Size of the word
+ */
+void spi_read(uint8_t bus, uint8_t out_byte, void *in_data, size_t len, spi_word_size_t word_size);
 
 #ifdef __cplusplus
 }

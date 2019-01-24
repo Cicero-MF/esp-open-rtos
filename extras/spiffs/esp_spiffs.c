@@ -7,11 +7,10 @@
  */
 #include "esp_spiffs.h"
 #include "spiffs.h"
-#include <espressif/spi_flash.h>
+#include <spiflash.h>
 #include <stdbool.h>
 #include <esp/uart.h>
 #include <fcntl.h>
-#include "esp_spiffs_flash.h"
 
 spiffs fs;
 
@@ -34,7 +33,7 @@ static fs_buf_t cache_buf = {0};
 
 static s32_t esp_spiffs_read(u32_t addr, u32_t size, u8_t *dst)
 {
-    if (esp_spiffs_flash_read(addr, dst, size) == ESP_SPIFFS_FLASH_ERROR) {
+    if (!spiflash_read(addr, dst, size)) {
         return SPIFFS_ERR_INTERNAL;
     }
 
@@ -43,7 +42,7 @@ static s32_t esp_spiffs_read(u32_t addr, u32_t size, u8_t *dst)
 
 static s32_t esp_spiffs_write(u32_t addr, u32_t size, u8_t *src)
 {
-    if (esp_spiffs_flash_write(addr, src, size) == ESP_SPIFFS_FLASH_ERROR) {
+    if (!spiflash_write(addr, src, size)) {
         return SPIFFS_ERR_INTERNAL;
     }
 
@@ -52,11 +51,10 @@ static s32_t esp_spiffs_write(u32_t addr, u32_t size, u8_t *src)
 
 static s32_t esp_spiffs_erase(u32_t addr, u32_t size)
 {
-    uint32_t sectors = size / SPI_FLASH_SEC_SIZE;
+    uint32_t sectors = size / SPI_FLASH_SECTOR_SIZE;
 
     for (uint32_t i = 0; i < sectors; i++) {
-        if (esp_spiffs_flash_erase_sector(addr + (SPI_FLASH_SEC_SIZE * i))
-                == ESP_SPIFFS_FLASH_ERROR) {
+        if (!spiflash_erase_sector(addr + (SPI_FLASH_SECTOR_SIZE * i))) {
             return SPIFFS_ERR_INTERNAL;
         }
     }
@@ -92,7 +90,7 @@ void esp_spiffs_init(uint32_t addr, uint32_t size)
     config.hal_write_f = esp_spiffs_write;
     config.hal_erase_f = esp_spiffs_erase;
 
-    config.fh_ix_offset = 3;
+    config.fh_ix_offset = SPIFFS_FILEHDL_OFFSET;
 
 }
 
@@ -125,32 +123,15 @@ int32_t esp_spiffs_mount()
 }
 
 // This implementation replaces implementation in core/newlib_syscals.c
-long _write_r(struct _reent *r, int fd, const char *ptr, int len )
+long _write_filesystem_r(struct _reent *r, int fd, const char *ptr, int len )
 {
-    if(fd != r->_stdout->_file) {
-        return SPIFFS_write(&fs, (spiffs_file)fd, (char*)ptr, len);
-    }
-    for(int i = 0; i < len; i++) {
-        /* Auto convert CR to CRLF, ignore other LFs (compatible with Espressif SDK behaviour) */
-        if(ptr[i] == '\r')
-            continue;
-        if(ptr[i] == '\n')
-            uart_putc(0, '\r');
-        uart_putc(0, ptr[i]);
-    }
-    return len;
+    return SPIFFS_write(&fs, (spiffs_file)fd, (char*)ptr, len);
 }
 
-// This function is weakly defined in core/newlib_syscalls.c
-long _read_stdin_r(struct _reent *r, int fd, char *ptr, int len);
-
 // This implementation replaces implementation in core/newlib_syscals.c
-long _read_r( struct _reent *r, int fd, char *ptr, int len )
+long _read_filesystem_r( struct _reent *r, int fd, char *ptr, int len )
 {
-    if(fd != r->_stdin->_file) {
-        return SPIFFS_read(&fs, (spiffs_file)fd, ptr, len);
-    }
-    return _read_stdin_r(r, fd, ptr, len);
+    return SPIFFS_read(&fs, (spiffs_file)fd, ptr, len);
 }
 
 int _open_r(struct _reent *r, const char *pathname, int flags, int mode)
@@ -168,7 +149,8 @@ int _open_r(struct _reent *r, const char *pathname, int flags, int mode)
     return SPIFFS_open(&fs, pathname, spiffs_flags, mode);
 }
 
-int _close_r(struct _reent *r, int fd)
+// This implementation replaces implementation in core/newlib_syscals.c
+int _close_filesystem_r(struct _reent *r, int fd)
 {
     return SPIFFS_close(&fs, (spiffs_file)fd);
 }
